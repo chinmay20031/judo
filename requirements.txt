@@ -1,0 +1,7 @@
+psutil
+requests
+pyttsx3
+SpeechRecognition
+pyaudio
+vosk
+sounddevice
