@@ -5,3 +5,4 @@ SpeechRecognition
 pyaudio
 vosk
 sounddevice
+graphifyy

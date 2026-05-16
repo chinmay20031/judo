@@ -16,6 +16,10 @@ try:
     import requests
 except Exception:
     requests = None
+try:
+    import graphify_integration as gfy
+except Exception:
+    gfy = None
 
 VOICE_AVAILABLE = True
 try:
@@ -147,6 +151,14 @@ def parse_voice_command(text):
                 msg = text[idx + len(kw):].strip()
                 return "speak", msg
     
+    # Graphify commands
+    if "graphify" in text_lower or "create graph" in text_lower or "create a graph" in text_lower or "make a graph" in text_lower:
+        # try to extract a path
+        words = text.split()
+        # crude: last word as path
+        path = words[-1]
+        return "graphify", path
+    
     return None, None
 
 
@@ -173,6 +185,16 @@ def execute_voice_command(command, arg):
         shutdown(confirm=True)
     elif command == "speak":
         speak(arg)
+    elif command == "graphify":
+        if gfy is None:
+            speak("Graphify integration is not installed")
+            return
+        speak(f"Running graphify on {arg}")
+        success, out = gfy.run_graphify(arg)
+        if success:
+            speak(f"Graph created at {out}")
+        else:
+            speak(f"Graphify failed: {out}")
     else:
         speak("Command not recognized")
 
@@ -397,6 +419,19 @@ def interactive_loop():
                 print("Usage: ha_state <entity_id>")
                 continue
             home_assistant_state(arg)
+        elif action == "graphify":
+            if not arg:
+                print("Usage: graphify <path>")
+                continue
+            if gfy is None:
+                print("Graphify integration not installed. Add graphifyy to your environment.")
+                continue
+            print("Running graphify on", arg)
+            ok, out = gfy.run_graphify(arg)
+            if ok:
+                print("Graph output:", out)
+            else:
+                print("Graphify failed:", out)
         else:
             print("Unknown command. Type 'help' for list.")
 
