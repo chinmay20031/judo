@@ -82,12 +82,13 @@ Wake-word service (prototype)
 - Install additional dependencies, download a Vosk model, and set `VOSK_MODEL_PATH` to the model folder. Example:
 
 ```powershell
-pip install vosk sounddevice
-# download an appropriate model (e.g., small English model) and unpack to a folder named 'model' or set VOSK_MODEL_PATH
+pip install vosk sounddevice numpy
+# download an appropriate model (e.g., small English model) and unpack to a folder named 'model'
+# or set VOSK_MODEL_PATH in the current shell and persistently
+$env:VOSK_MODEL_PATH = "C:\path\to\vosk-model-small-en-us-0.15"
 setx VOSK_MODEL_PATH "C:\path\to\vosk-model-small-en-us-0.15"
 python service_judo.py
 ```
-
 When `service_judo.py` detects the word "judo" it will call `python judo.py listen` to capture a follow-up command.
 
 Security & next steps

@@ -21,16 +21,31 @@ try:
 except Exception:
     gfy = None
 
-VOICE_AVAILABLE = True
 try:
     import speech_recognition as sr
+except Exception:
+    sr = None
+
+try:
     import pyttsx3
 except Exception:
-    VOICE_AVAILABLE = False
+    pyttsx3 = None
+
+# Vosk fallback (uses sounddevice) to avoid PyAudio build issues on Windows
+VOSK_AVAILABLE = False
+try:
+    from vosk import Model, KaldiRecognizer
+    import sounddevice as sd
+    import numpy as np
+    VOSK_AVAILABLE = True
+except Exception:
+    VOSK_AVAILABLE = False
+
+VOICE_AVAILABLE = sr is not None or VOSK_AVAILABLE
 
 
 def speak(text):
-    if not VOICE_AVAILABLE:
+    if pyttsx3 is None:
         print("SPEAK:", text)
         return
     engine = pyttsx3.init()
@@ -39,16 +54,39 @@ def speak(text):
 
 
 def listen_once(timeout=5):
-    if not VOICE_AVAILABLE:
-        return None
-    r = sr.Recognizer()
-    with sr.Microphone() as source:
-        r.adjust_for_ambient_noise(source, duration=0.5)
+    # Preferred: SpeechRecognition + PyAudio
+    if sr is not None:
         try:
-            audio = r.listen(source, timeout=timeout)
-            return r.recognize_google(audio)
+            r = sr.Recognizer()
+            with sr.Microphone() as source:
+                r.adjust_for_ambient_noise(source, duration=0.5)
+                audio = r.listen(source, timeout=timeout)
+                return r.recognize_google(audio)
         except Exception:
             return None
+
+    # Fallback: Vosk + sounddevice (requires a Vosk model)
+    if VOSK_AVAILABLE:
+        model_path = os.environ.get("VOSK_MODEL_PATH", str(Path(__file__).parent / "model"))
+        if not os.path.exists(model_path):
+            return None
+        try:
+            model = Model(model_path)
+            rec = KaldiRecognizer(model, 16000)
+            duration = max(1, int(timeout))
+            recording = sd.rec(int(duration * 16000), samplerate=16000, channels=1, dtype='int16')
+            sd.wait()
+            data = recording.tobytes()
+            if rec.AcceptWaveform(data):
+                res = json.loads(rec.Result())
+                return res.get("text")
+            else:
+                res = json.loads(rec.PartialResult())
+                return res.get("partial")
+        except Exception:
+            return None
+
+    return None
 
 
 def load_config():
@@ -202,8 +240,11 @@ def execute_voice_command(command, arg):
 def voice_loop():
     """Continuous voice command loop."""
     if not VOICE_AVAILABLE:
-        print("Voice not available. Install SpeechRecognition and pyttsx3.")
+        print("Voice not available. Install SpeechRecognition/pyttsx3 or install Vosk, sounddevice, and a Vosk model.")
         return
+    
+    if pyttsx3 is None:
+        print("TTS not available, voice output will be printed instead.")
     
     speak("Judo voice mode active")
     while True:
