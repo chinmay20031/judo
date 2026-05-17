@@ -40,17 +40,27 @@ try:
 except Exception:
     pyttsx3 = None
 
+SOUNDDEVICE_AVAILABLE = False
+try:
+    import sounddevice as sd
+    SOUNDDEVICE_AVAILABLE = True
+except Exception:
+    sd = None
+    SOUNDDEVICE_AVAILABLE = False
+
 # Vosk fallback (uses sounddevice) to avoid PyAudio build issues on Windows
 VOSK_AVAILABLE = False
 try:
     from vosk import Model, KaldiRecognizer
-    import sounddevice as sd
     import numpy as np
-    VOSK_AVAILABLE = True
+    if SOUNDDEVICE_AVAILABLE:
+        VOSK_AVAILABLE = True
+    else:
+        VOSK_AVAILABLE = False
 except Exception:
     VOSK_AVAILABLE = False
 
-VOICE_AVAILABLE = sr is not None or VOSK_AVAILABLE
+VOICE_AVAILABLE = sr is not None and SOUNDDEVICE_AVAILABLE or VOSK_AVAILABLE
 
 # Common app name aliases -> command to run on Windows
 APP_ALIASES = {
@@ -126,7 +136,26 @@ def speak(text):
 
 
 def listen_once(timeout=5, verbose=True):
-    # Preferred: SpeechRecognition + PyAudio
+    # Preferred: SpeechRecognition + sounddevice (Google) when PyAudio is unavailable
+    if sr is not None and SOUNDDEVICE_AVAILABLE:
+        if verbose:
+            print("[VOICE] Trying SpeechRecognition with sounddevice...")
+        try:
+            r = sr.Recognizer()
+            duration = max(1, int(timeout))
+            if verbose:
+                print("[VOICE] Recording audio for {} seconds...".format(duration))
+            recording = sd.rec(int(duration * 16000), samplerate=16000, channels=1, dtype='int16')
+            sd.wait()
+            audio_data = sr.AudioData(recording.tobytes(), 16000, 2)
+            if verbose:
+                print("[VOICE] Processing audio with Google...")
+            return r.recognize_google(audio_data)
+        except Exception as e:
+            if verbose:
+                print("[VOICE] SpeechRecognition via sounddevice failed: {}: {}".format(type(e).__name__, e))
+
+    # Fallback: SpeechRecognition with microphone if available
     if sr is not None:
         if verbose:
             print("[VOICE] Trying SpeechRecognition with microphone...")
@@ -232,6 +261,21 @@ def is_trusted_device(url):
     return any(url.startswith(entry) for entry in trusted)
 
 
+def strip_wake_word(text):
+    """Remove the wake phrase from the incoming command text."""
+    if not text:
+        return text, False
+    text = text.strip()
+    lower = text.lower()
+    wake_phrases = ["hey do then", "hey do", "hey then", "hey", "a"]
+    for wake in wake_phrases:
+        if lower == wake:
+            return "", True
+        if lower.startswith(wake + " "):
+            return text[len(wake):].strip(), True
+    return text, False
+
+
 def parse_voice_command(text):
     """Parse natural language commands into executable actions."""
     if not text:
@@ -261,6 +305,15 @@ def parse_voice_command(text):
                 for f in ("the", "a", "my", "please", "to", "that", "which"):
                     app = app.replace(f" {f} ", " ")
                 app = app.strip()
+                # direct website service shortcuts
+                if "youtube" in app:
+                    return "website", "https://www.youtube.com"
+                if "google" in app and "search" not in app:
+                    return "website", "https://www.google.com"
+                if "facebook" in app:
+                    return "website", "https://www.facebook.com"
+                if "twitter" in app:
+                    return "website", "https://www.twitter.com"
                 # URL detection: contains a dot-like token or starts with http/www
                 if app.startswith("http") or app.startswith("www") or "." in app:
                     if not app.startswith("http"):
@@ -389,24 +442,38 @@ def voice_loop():
     speak("Judo voice mode active")
     while True:
         try:
-            speak("Listening for your command")
+            speak("Listening for your wake phrase")
             text = listen_once(timeout=10)
             if not text:
                 speak("Sorry, I did not hear that")
                 continue
             
             print(f"You said: {text}")
-            command, arg = parse_voice_command(text)
+            command_text, woke = strip_wake_word(text)
+            if not woke:
+                # Allow direct commands without the wake phrase
+                command_text = text
+            elif not command_text:
+                speak("I heard the wake word, but no command was provided")
+                continue
+            
+            command, arg = parse_voice_command(command_text)
             if command:
                 execute_voice_command(command, arg)
             else:
-                speak("I did not understand that command")
+                if woke:
+                    speak("I did not understand that command")
+                else:
+                    speak("Say 'hey' or 'hey do' before your command, or try a simple command like 'open youtube'")
+                continue
+            break
         except KeyboardInterrupt:
             speak("Goodbye")
             break
         except Exception as e:
             print("Error:", e)
             speak("An error occurred")
+            break
 
 
 def create_file(path, content=""):

@@ -51,6 +51,6 @@ try {
     Write-Host "  - Or disable in Task Scheduler"
 }
 catch {
-    Write-Host "ERROR: Failed to register scheduled task: $PSItem"
+    Write-Host "ERROR: Failed to register scheduled task: $($PSItem.Exception.Message)"
     exit 1
 }
