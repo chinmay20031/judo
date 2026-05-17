@@ -6,7 +6,13 @@ from pathlib import Path
 
 def graphify_available():
     """Return True if the `graphify` CLI or `graphifyy` package is available."""
-    return shutil.which("graphify") is not None
+    if shutil.which("graphify"):
+        return True
+    try:
+        import graphify  # type: ignore
+        return True
+    except Exception:
+        return False
 
 
 def run_graphify(path, out_dir=None, extra_args=None):

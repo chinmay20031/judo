@@ -72,29 +72,11 @@ Security
 
 Notes & next steps
 - This is a prototype. For a full "Jarvis"-style assistant you'll likely want:
-  - persistent service/daemon with a wake word
   - secure authentication for device control
   - integrations with smart home APIs (e.g., Home Assistant, Philips Hue)
   - better process management for opening/closing files
 
-Wake-word service (prototype)
-- A simple wake-word service using Vosk is included as `service_judo.py`.
-- Install additional dependencies, download a Vosk model, and set `VOSK_MODEL_PATH` to the model folder. Example:
-
-```powershell
-pip install vosk sounddevice numpy
-# download an appropriate model (e.g., small English model) and unpack to a folder named 'model'
-# or set VOSK_MODEL_PATH in the current shell and persistently
-$env:VOSK_MODEL_PATH = "C:\path\to\vosk-model-small-en-us-0.15"
-setx VOSK_MODEL_PATH "C:\path\to\vosk-model-small-en-us-0.15"
-python service_judo.py
-```
-When `service_judo.py` detects the word "judo" it will call `python judo.py listen` to capture a follow-up command.
-
 Security & next steps
 - Add authentication for device endpoints before enabling networked control.
 - Integrate with Home Assistant or Philips Hue via their APIs for safer device management.
-- To run `service_judo.py` at startup, consider creating a Task Scheduler entry or a Windows service wrapper (e.g., `nssm`).
-
-Security
 - Be careful with commands like `shutdown` and arbitrary device requests. Only run trusted commands and configure device endpoints you control.

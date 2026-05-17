@@ -2,7 +2,6 @@ import os
 import sys
 import subprocess
 import webbrowser
-import threading
 import time
 import json
 from pathlib import Path
@@ -261,21 +260,6 @@ def is_trusted_device(url):
     return any(url.startswith(entry) for entry in trusted)
 
 
-def strip_wake_word(text):
-    """Remove the wake phrase from the incoming command text."""
-    if not text:
-        return text, False
-    text = text.strip()
-    lower = text.lower()
-    wake_phrases = ["hey do then", "hey do", "hey then", "hey", "a"]
-    for wake in wake_phrases:
-        if lower == wake:
-            return "", True
-        if lower.startswith(wake + " "):
-            return text[len(wake):].strip(), True
-    return text, False
-
-
 def parse_voice_command(text):
     """Parse natural language commands into executable actions."""
     if not text:
@@ -366,11 +350,20 @@ def parse_voice_command(text):
     
     # Graphify commands
     if "graphify" in text_lower or "create graph" in text_lower or "create a graph" in text_lower or "make a graph" in text_lower:
-        # try to extract a path
-        words = text.split()
-        # crude: last word as path
-        path = words[-1]
-        return "graphify", path
+        phrase = None
+        for p in ("create a graph", "create graph", "make a graph", "graphify"):
+            if p in text_lower:
+                phrase = p
+                break
+        if phrase:
+            _, rest = text.split(phrase, 1)
+            path = rest.strip()
+            for prefix in ("for ", "from ", "on ", "the ", "my "):
+                if path.lower().startswith(prefix):
+                    path = path[len(prefix):].strip()
+            if not path or path.lower() in ("this", "this project", "project", "folder", "directory"):
+                path = "."
+            return "graphify", path
     
     return None, None
 
@@ -697,7 +690,7 @@ def interactive_loop():
                 print("Usage: graphify <path>")
                 continue
             if gfy is None:
-                print("Graphify integration not installed. Add graphifyy to your environment.")
+                print("Graphify integration not installed. Install the graphifyy package or ensure the graphify CLI is available.")
                 continue
             print("Running graphify on", arg)
             ok, out = gfy.run_graphify(arg)
