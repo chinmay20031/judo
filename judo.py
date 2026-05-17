@@ -3,6 +3,7 @@ import sys
 import subprocess
 import webbrowser
 import time
+import time
 import json
 from pathlib import Path
 
@@ -368,6 +369,46 @@ def parse_voice_command(text):
     return None, None
 
 
+def log_recognition(text, note=None):
+    try:
+        p = Path(__file__).parent / "voice_log.txt"
+        with open(p, "a", encoding="utf-8") as f:
+            ts = datetime.utcnow().isoformat()
+            f.write(f"{ts}\t{note or 'rec'}\t{text}\n")
+    except Exception:
+        pass
+
+
+def is_noise(text):
+    """Heuristic to ignore very short/garbled recognitions."""
+    if not text:
+        return True
+    t = text.strip()
+    # too short
+    if len(t) < 3:
+        return True
+    parts = t.split()
+    # require at least two words for most commands
+    if len(parts) < 2:
+        return True
+    # repeated token spam (e.g., "got got got")
+    prev = None
+    repeat = 0
+    for w in parts:
+        if w == prev:
+            repeat += 1
+            if repeat >= 2:
+                return True
+        else:
+            prev = w
+            repeat = 0
+    # too many non-alpha characters
+    non_alpha = sum(1 for c in t if not c.isalnum() and not c.isspace())
+    if non_alpha > len(t) * 0.5:
+        return True
+    return False
+
+
 def execute_voice_command(command, arg):
     """Execute parsed voice command."""
     if command == "create":
@@ -390,10 +431,21 @@ def execute_voice_command(command, arg):
         close_by_process_name(arg)
         speak(f"Closing {arg}")
     elif command == "shutdown":
-        speak("Shutdown requested. Say 'confirm shutdown' to proceed, or say 'cancel'.")
-        # listen for a short confirmation
-        resp = listen_once(timeout=7)
-        if resp and "confirm" in resp.lower():
+        speak("Shutdown requested. Say 'confirm' or 'confirm shutdown' to proceed, or say 'cancel'.")
+        # listen for confirmation up to a few attempts
+        confirmed = False
+        for _ in range(3):
+            resp = listen_once(timeout=5)
+            if not resp:
+                continue
+            r = resp.lower().strip()
+            log_recognition(r, note="shutdown-confirm")
+            if "confirm" in r or r in ("yes", "y", "confirm shutdown"):
+                confirmed = True
+                break
+            if "cancel" in r or r == "no":
+                break
+        if confirmed:
             speak("Shutting down the PC in 10 seconds")
             time.sleep(10)
             shutdown(confirm=True)
@@ -442,6 +494,10 @@ def voice_loop():
                 continue
             
             print(f"You said: {text}")
+            log_recognition(text)
+            if is_noise(text):
+                print("Ignored noisy input")
+                continue
             command, arg = parse_voice_command(text)
             if command:
                 execute_voice_command(command, arg)
