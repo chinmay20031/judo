@@ -442,31 +442,20 @@ def voice_loop():
     speak("Judo voice mode active")
     while True:
         try:
-            speak("Listening for your wake phrase")
+            speak("Listening")
             text = listen_once(timeout=10)
             if not text:
                 speak("Sorry, I did not hear that")
                 continue
             
             print(f"You said: {text}")
-            command_text, woke = strip_wake_word(text)
-            if not woke:
-                # Allow direct commands without the wake phrase
-                command_text = text
-            elif not command_text:
-                speak("I heard the wake word, but no command was provided")
-                continue
-            
-            command, arg = parse_voice_command(command_text)
+            command, arg = parse_voice_command(text)
             if command:
                 execute_voice_command(command, arg)
-            else:
-                if woke:
-                    speak("I did not understand that command")
-                else:
-                    speak("Say 'hey' or 'hey do' before your command, or try a simple command like 'open youtube'")
                 continue
-            break
+            else:
+                speak("I did not understand that command")
+                continue
         except KeyboardInterrupt:
             speak("Goodbye")
             break
