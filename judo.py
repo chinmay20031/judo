@@ -7,6 +7,15 @@ import time
 import json
 from pathlib import Path
 
+# Set default Vosk model path - prioritize local model over environment variable
+local_model = Path(__file__).parent / "model" / "vosk-model-small-en-us-0.15"
+if local_model.exists():
+    os.environ["VOSK_MODEL_PATH"] = str(local_model)
+elif not os.environ.get("VOSK_MODEL_PATH") or not Path(os.environ.get("VOSK_MODEL_PATH", "")).exists():
+    # If env var is set but invalid, clear it
+    if "VOSK_MODEL_PATH" in os.environ:
+        del os.environ["VOSK_MODEL_PATH"]
+
 try:
     import psutil
 except Exception:
@@ -43,6 +52,69 @@ except Exception:
 
 VOICE_AVAILABLE = sr is not None or VOSK_AVAILABLE
 
+# Common app name aliases -> command to run on Windows
+APP_ALIASES = {
+    "notepad": "notepad",
+    "calculator": "calc",
+    "calc": "calc",
+    "explorer": "explorer",
+    "edge": "msedge",
+    "chrome": "chrome",
+    "firefox": "firefox",
+    "vscode": "code",
+    "code": "code",
+    "spotify": "spotify",
+    "slack": "slack",
+    "steam": "steam",
+}
+
+# Default allowed apps (can be extended via judo_config.json `allowed_apps` comma-separated)
+ALLOWED_APPS = set(APP_ALIASES.values())
+
+
+def is_app_allowed(name):
+    """Return True if the app/command is permitted to be launched via voice."""
+    if not name:
+        return False
+    n = name.strip().lower()
+    # allow obvious executables or paths
+    if (n.startswith("http") or "." in n or n.endswith(".exe")
+            or n.startswith("\\") or "/" in n or "\\\\" in n):
+        return True
+    # check aliases and config
+    allowed = set(ALLOWED_APPS)
+    cfg = get_config("allowed_apps")
+    if cfg:
+        if isinstance(cfg, str):
+            for item in cfg.split(","):
+                allowed.add(item.strip().lower())
+        elif isinstance(cfg, list):
+            for item in cfg:
+                allowed.add(str(item).strip().lower())
+    # match by first token
+    first = n.split()[0]
+    return first in allowed
+
+
+def save_config(cfg):
+    """Persist configuration to `judo_config.json`. Merges with existing file."""
+    try:
+        path = Path(__file__).parent / "judo_config.json"
+        existing = {}
+        if path.exists():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = {}
+        merged = {**existing, **cfg}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=2)
+        return True
+    except Exception as e:
+        print("Failed to save config:", e)
+        return False
+
 
 def speak(text):
     if pyttsx3 is None:
@@ -53,29 +125,60 @@ def speak(text):
     engine.runAndWait()
 
 
-def listen_once(timeout=5):
+def listen_once(timeout=5, verbose=True):
     # Preferred: SpeechRecognition + PyAudio
     if sr is not None:
+        if verbose:
+            print("[VOICE] Trying SpeechRecognition with microphone...")
         try:
             r = sr.Recognizer()
             with sr.Microphone() as source:
+                if verbose:
+                    print("[VOICE] Adjusting for ambient noise...")
                 r.adjust_for_ambient_noise(source, duration=0.5)
+                if verbose:
+                    print("[VOICE] Listening (timeout={}s)...".format(timeout))
                 audio = r.listen(source, timeout=timeout)
+                if verbose:
+                    print("[VOICE] Processing audio with Google...")
                 return r.recognize_google(audio)
-        except Exception:
-            return None
+        except Exception as e:
+            if verbose:
+                print("[VOICE] SpeechRecognition failed: {}: {}".format(type(e).__name__, e))
 
     # Fallback: Vosk + sounddevice (requires a Vosk model)
     if VOSK_AVAILABLE:
-        model_path = os.environ.get("VOSK_MODEL_PATH", str(Path(__file__).parent / "model"))
-        if not os.path.exists(model_path):
+        if verbose:
+            print("[VOICE] Trying Vosk + sounddevice...")
+        # Try VOSK_MODEL_PATH env var, then common locations
+        model_path = os.environ.get("VOSK_MODEL_PATH")
+        if not model_path:
+            candidates = [
+                str(Path(__file__).parent / "model" / "vosk-model-small-en-us-0.15"),
+                str(Path(__file__).parent / "model"),
+            ]
+            for cand in candidates:
+                if os.path.exists(cand):
+                    model_path = cand
+                    break
+        if verbose:
+            print("[VOICE] Model path: {}".format(model_path))
+        if not model_path or not os.path.exists(model_path):
+            if verbose:
+                print("[VOICE] Model path does not exist! Download from https://alphacephei.com/vosk/models/")
             return None
         try:
+            if verbose:
+                print("[VOICE] Loading Vosk model...")
             model = Model(model_path)
             rec = KaldiRecognizer(model, 16000)
             duration = max(1, int(timeout))
+            if verbose:
+                print("[VOICE] Recording audio for {} seconds...".format(duration))
             recording = sd.rec(int(duration * 16000), samplerate=16000, channels=1, dtype='int16')
             sd.wait()
+            if verbose:
+                print("[VOICE] Processing with Vosk...")
             data = recording.tobytes()
             if rec.AcceptWaveform(data):
                 res = json.loads(rec.Result())
@@ -83,9 +186,13 @@ def listen_once(timeout=5):
             else:
                 res = json.loads(rec.PartialResult())
                 return res.get("partial")
-        except Exception:
+        except Exception as e:
+            if verbose:
+                print("[VOICE] Vosk failed: {}: {}".format(type(e).__name__, e))
             return None
 
+    if verbose:
+        print("[VOICE] No voice method available!")
     return None
 
 
@@ -150,7 +257,22 @@ def parse_voice_command(text):
             if kw in text_lower:
                 idx = text_lower.index(kw)
                 app = text[idx + len(kw):].strip()
-                return "openapp", app
+                # remove common filler words
+                for f in ("the", "a", "my", "please", "to", "that", "which"):
+                    app = app.replace(f" {f} ", " ")
+                app = app.strip()
+                # URL detection: contains a dot-like token or starts with http/www
+                if app.startswith("http") or app.startswith("www") or "." in app:
+                    if not app.startswith("http"):
+                        app = "https://" + app
+                    return "website", app
+                # try mapping common app aliases, prefer the first word or two
+                parts = app.split()
+                candidate = " ".join(parts[:2]) if len(parts) > 1 else parts[0] if parts else ""
+                cand_key = candidate.split()[0].lower() if candidate else ""
+                if cand_key in APP_ALIASES:
+                    return "openapp", APP_ALIASES[cand_key]
+                return "openapp", candidate
     if "xbox" in text_lower:
         return "openapp", "xbox"
     if "youtube" in text_lower:
@@ -209,6 +331,10 @@ def execute_voice_command(command, arg):
         open_file(arg)
         speak(f"Opened {arg}")
     elif command == "openapp":
+        # enforce allowed apps for voice-triggered launches
+        if not is_app_allowed(arg):
+            speak(f"Refusing to open {arg}. Add it to allowed_apps in judo_config.json to enable this action.")
+            return
         open_app(arg)
         speak(f"Opening {arg}")
     elif command == "website":
@@ -218,9 +344,15 @@ def execute_voice_command(command, arg):
         close_by_process_name(arg)
         speak(f"Closing {arg}")
     elif command == "shutdown":
-        speak("Shutting down the PC in 10 seconds")
-        time.sleep(10)
-        shutdown(confirm=True)
+        speak("Shutdown requested. Say 'confirm shutdown' to proceed, or say 'cancel'.")
+        # listen for a short confirmation
+        resp = listen_once(timeout=7)
+        if resp and "confirm" in resp.lower():
+            speak("Shutting down the PC in 10 seconds")
+            time.sleep(10)
+            shutdown(confirm=True)
+        else:
+            speak("Shutdown cancelled")
     elif command == "speak":
         speak(arg)
     elif command == "graphify":
@@ -239,6 +371,14 @@ def execute_voice_command(command, arg):
 
 def voice_loop():
     """Continuous voice command loop."""
+    # Clean up stray temp files silently
+    try:
+        temp_file = Path(__file__).parent / "tempCodeRunnerFile.py"
+        if temp_file.exists():
+            temp_file.unlink()
+    except Exception:
+        pass
+    
     if not VOICE_AVAILABLE:
         print("Voice not available. Install SpeechRecognition/pyttsx3 or install Vosk, sounddevice, and a Vosk model.")
         return
@@ -429,6 +569,42 @@ def interactive_loop():
             print("Listening... (may require PyAudio and SpeechRecognition)")
             text = listen_once()
             print("Heard:", text)
+        elif action == "allowapp":
+            parts = arg.split(maxsplit=1)
+            if not parts:
+                print("Usage: allowapp add|remove|list <app>")
+                continue
+            sub = parts[0].lower()
+            val = parts[1].strip() if len(parts) > 1 else ""
+            cfg = load_config()
+            allowed = cfg.get("allowed_apps") or []
+            if isinstance(allowed, str):
+                allowed = [x.strip() for x in allowed.split(",") if x.strip()]
+            if sub == "list":
+                print("Allowed apps:", ", ".join(allowed or list(ALLOWED_APPS)))
+            elif sub == "add":
+                if not val:
+                    print("Usage: allowapp add <app>")
+                    continue
+                if val.lower() in [x.lower() for x in allowed]:
+                    print(val, "already allowed")
+                    continue
+                allowed.append(val)
+                if save_config({"allowed_apps": allowed}):
+                    print("Added and saved allowed app:", val)
+                else:
+                    print("Failed to save allowed app")
+            elif sub == "remove":
+                if not val:
+                    print("Usage: allowapp remove <app>")
+                    continue
+                allowed = [x for x in allowed if x.lower() != val.lower()]
+                if save_config({"allowed_apps": allowed}):
+                    print("Removed and saved:", val)
+                else:
+                    print("Failed to save allowed app")
+            else:
+                print("Unknown subcommand for allowapp. Use add|remove|list")
         elif action == "device":
             parts = arg.split(maxsplit=2)
             url = parts[0] if parts else ""
