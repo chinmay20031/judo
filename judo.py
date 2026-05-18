@@ -25,10 +25,7 @@ try:
     import requests
 except Exception:
     requests = None
-try:
-    import graphify_integration as gfy
-except Exception:
-    gfy = None
+
 
 try:
     import speech_recognition as sr
@@ -349,23 +346,6 @@ def parse_voice_command(text):
                 msg = text[idx + len(kw):].strip()
                 return "speak", msg
     
-    # Graphify commands
-    if "graphify" in text_lower or "create graph" in text_lower or "create a graph" in text_lower or "make a graph" in text_lower:
-        phrase = None
-        for p in ("create a graph", "create graph", "make a graph", "graphify"):
-            if p in text_lower:
-                phrase = p
-                break
-        if phrase:
-            _, rest = text.split(phrase, 1)
-            path = rest.strip()
-            for prefix in ("for ", "from ", "on ", "the ", "my "):
-                if path.lower().startswith(prefix):
-                    path = path[len(prefix):].strip()
-            if not path or path.lower() in ("this", "this project", "project", "folder", "directory"):
-                path = "."
-            return "graphify", path
-    
     return None, None
 
 
@@ -453,16 +433,6 @@ def execute_voice_command(command, arg):
             speak("Shutdown cancelled")
     elif command == "speak":
         speak(arg)
-    elif command == "graphify":
-        if gfy is None:
-            speak("Graphify integration is not installed")
-            return
-        speak(f"Running graphify on {arg}")
-        success, out = gfy.run_graphify(arg)
-        if success:
-            speak(f"Graph created at {out}")
-        else:
-            speak(f"Graphify failed: {out}")
     else:
         speak("Command not recognized")
 
@@ -488,7 +458,7 @@ def voice_loop():
     while True:
         try:
             speak("Listening")
-            text = listen_once(timeout=10)
+            text = listen_once(timeout=4)
             if not text:
                 speak("Sorry, I did not hear that")
                 continue
@@ -741,19 +711,6 @@ def interactive_loop():
                 print("Usage: ha_state <entity_id>")
                 continue
             home_assistant_state(arg)
-        elif action == "graphify":
-            if not arg:
-                print("Usage: graphify <path>")
-                continue
-            if gfy is None:
-                print("Graphify integration not installed. Install the graphifyy package or ensure the graphify CLI is available.")
-                continue
-            print("Running graphify on", arg)
-            ok, out = gfy.run_graphify(arg)
-            if ok:
-                print("Graph output:", out)
-            else:
-                print("Graphify failed:", out)
         else:
             print("Unknown command. Type 'help' for list.")
 
